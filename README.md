@@ -5,9 +5,7 @@ evidence.
 
 This repo applies kane-cli's Assurance + Evidence lifecycle — Requirement → Use Case →
 Acceptance Criteria → Scenario → test.md → Execution → Evidence → Coverage — to
-[hitechdigital.com](https://www.hitechdigital.com/), following the structure and design
-principle demonstrated in
-[abidkidwai786/travel-kanecli-assurance](https://github.com/abidkidwai786/travel-kanecli-assurance):
+[hitechdigital.com](https://www.hitechdigital.com)
 
 > **Human performs the design phase locally** (ingestion, extraction, review, test design).
 > **GitHub Actions handles repeatable execution** (installation, authentication, test runs,
