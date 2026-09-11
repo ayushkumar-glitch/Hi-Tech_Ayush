@@ -3,52 +3,71 @@
 **Problem statement:** Create a GitHub Actions workflow with kane-cli covering assurance and
 evidence.
 
-This repo wires kane-cli's **assurance** pipeline (requirement-linked test design + coverage
-accounting) and **evidence** packs (sealed, validated run artifacts) into a GitHub Actions
-workflow, following the flow documented in
-[gagan-lambda/agentic-sdlc-pitch](https://github.com/gagan-lambda/agentic-sdlc-pitch):
-requirements in → tests designed and authored → replayed → coverage and evidence published.
+This repo applies kane-cli's Assurance + Evidence lifecycle — Requirement → Use Case →
+Acceptance Criteria → Scenario → test.md → Execution → Evidence → Coverage — to
+[hitechdigital.com](https://www.hitechdigital.com/), following the structure and design
+principle demonstrated in
+[abidkidwai786/travel-kanecli-assurance](https://github.com/abidkidwai786/travel-kanecli-assurance):
 
-## What the workflow does
-
-`.github/workflows/assurance-evidence.yml` (manual dispatch only, to avoid burning credits on
-every commit):
-
-1. **Ingest** `requirements/prd.md` and extract use-cases (`kane-cli context ingest`).
-2. **Checkpoint 1** — auto-approve extracted use-cases with recommended defaults (toggle via
-   the `auto_approve` input).
-3. **Design** tests against each trusted use-case (`kane-cli design tests --max 8`), writing
-   requirement-linked tests under `.testmuai/tests/*_test.md`, each step tagged with the
-   acceptance criteria it verifies.
-4. **Checkpoint 2** — auto-approve the designed tests.
-5. **Author** each designed test in a real browser (`kane-cli testmd run`).
-6. **Replay** the authored suite as a batch (`kane-cli testrun run`).
-7. **Publish coverage** — `kane-cli cover gaps --json` rendered as a traceability matrix
-   (AC → use-case → test → designed %/proven %) in the GitHub Step Summary.
-8. **Validate & upload evidence** — every sealed `.evidence` pack is checked with
-   `kane-cli evidence validate` and uploaded as a downloadable Actions artifact, alongside the
-   designed tests and raw pipeline logs.
+> **Human performs the design phase locally** (ingestion, extraction, review, test design).
+> **GitHub Actions handles repeatable execution** (installation, authentication, test runs,
+> evidence validation, artifact uploads).
 
 ## Repository structure
 
 ```
 ├── .github/workflows/
-│   └── assurance-evidence.yml   # the CI workflow
-├── ci/
-│   ├── assurance_pipeline.py    # ingest -> extract -> design -> author -> replay
-│   ├── traceability.py          # cover gaps -> AC/use-case/test matrix -> step summary
-│   └── evidence.py              # validate .evidence packs -> step summary
+│   └── assurance-evidence.yml   # CI: install kane-cli, replay committed tests, validate evidence
 ├── requirements/
-│   └── prd.md                   # the requirements document kane-cli ingests
-├── scenarios/                   # (populated by design tests, gitignored output lands in .testmuai/)
-├── tests/                       # place for hand-curated fixtures, if any (tests themselves are authored, not written by hand)
-├── requirements.txt
+│   └── hitech-requirements.md   # source requirements doc (5 use-cases, 15 acceptance criteria)
+├── tests/
+│   ├── main-navigation-routes-to-contact-us_test.md
+│   ├── main-navigation-routes-to-who-we-are_test.md
+│   ├── homepage-talk-to-an-expert-cta-opens-the-contact-lead-form_test.md
+│   ├── what-we-do-lists-the-required-named-services_test.md
+│   ├── ai-ml-services-selection-opens-the-service-destination-page_test.md
+│   └── direct-sales-contact-details-are-visible-without-form_test.md
 └── README.md
 ```
 
-`.context/` (the assurance store) and `.testmuai/` (designed tests + sealed evidence) are
-local/CI-generated and gitignored — they're published as workflow artifacts instead of
-committed.
+`.testmuai/` (containing `.context/`, the local assurance store, and `evidence/`, sealed run
+packs) is intentionally excluded from git, per kane-cli guidance that the context store is
+append-only and machine-specific — CI regenerates evidence on every run and publishes it as a
+workflow artifact instead.
+
+## How the tests were designed (local, one-time)
+
+```bash
+npm install -g @testmuai/kane-cli@latest
+kane-cli login --username $LT_USERNAME --access-key $LT_ACCESS_KEY
+
+kane-cli context ingest requirements/hitech-requirements.md --mode agent   # extract use-cases
+kane-cli context review --verdicts verdicts.json --json                   # approve use-cases
+kane-cli design tests --use-case uc-1 --mode agent --max 3                # design ACs/scenarios/tests
+kane-cli context review --verdicts verdicts.json --json                   # approve the design
+kane-cli testmd run tests/<name>_test.md --agent --headless               # author in a real browser
+```
+
+Every test under `tests/` is requirement-linked: each `@verifies ac-N` step tag traces back to
+an acceptance criterion in `requirements/hitech-requirements.md`.
+
+**One use-case's test — subscribing to the newsletter — was intentionally excluded.** The
+designed test would perform a real submission against HiTech Digital's live newsletter form,
+and initial authoring showed the form requires First Name / Last Name / Industry in addition to
+email, so it never actually succeeded. Rather than let a CI-triggered run retry into a real
+signup, that test stays out of `tests/` (kept locally, unauthored) and out of the committed
+suite. Read-only assertion coverage for that use-case's other criteria (signup field/CTA
+visibility) is still exercised by design; only the actual form-submit step was cut.
+
+## What CI does
+
+`.github/workflows/assurance-evidence.yml` — runs on push to `main` (and manual dispatch):
+
+1. Install Node.js 20 and `@testmuai/kane-cli`.
+2. Authenticate with `LT_USERNAME` / `LT_ACCESS_KEY` secrets.
+3. `kane-cli testrun run tests/*_test.md --headless` — replays the 6 committed tests as one batch.
+4. `kane-cli evidence validate` — integrity-checks every sealed `.evidence` pack.
+5. Uploads `evidence-packs` and `test-results` as downloadable workflow artifacts.
 
 ## GitHub Secrets required
 
@@ -56,43 +75,13 @@ committed.
 |---|---|
 | `LT_USERNAME` | accounts.lambdatest.com/security |
 | `LT_ACCESS_KEY` | accounts.lambdatest.com/security |
-| `ANTHROPIC_API_KEY` | console.anthropic.com |
-
-## Workflow inputs
-
-| Input | Required | Purpose |
-|---|---|---|
-| `tm_project_id` | ✅ | Test Manager project ID |
-| `tm_environment_id` | optional | Test environment ID |
-| `kane_folder_id` | recommended | KaneAI folder ID for saving authored tests |
-| `prd_path` | optional (default `requirements/prd.md`) | Requirements document to ingest |
-| `design_max` | optional (default `8`) | Max scenario+test pairs per use-case |
-| `auto_approve` | optional (default `true`) | Auto-approve assurance checkpoints with recommended defaults |
 
 ## Local execution
 
 ```bash
-npm install -g @testmuai/kane-cli@latest
-pip install -r requirements.txt
+npm install -g @testmuai/kane-cli
 kane-cli login --username $LT_USERNAME --access-key $LT_ACCESS_KEY
-kane-cli config project YOUR_TM_PROJECT_ID
-
-PRD_PATH=requirements/prd.md DESIGN_MAX=8 AUTO_APPROVE=true python3 ci/assurance_pipeline.py
-python3 ci/traceability.py
-python3 ci/evidence.py
+kane-cli testrun run tests/*_test.md --headless
+kane-cli evidence validate .testmuai/evidence/<id>.evidence --json
+kane-cli evidence serve .testmuai/evidence/<id>.evidence   # view results in a browser
 ```
-
-## Design notes
-
-- **Manual dispatch only:** assurance (`context extract`, `design tests`) and authoring
-  (`testmd run`) calls consume kane-cli credits — this must not auto-trigger on every push.
-- **Two checkpoints, auto-approvable in CI:** the assurance journey has two human-review
-  checkpoints (use-case approval, design approval). In CI these default to auto-approving the
-  tool's recommended verdicts (`auto_approve: true`); set it to `false` to leave items queued
-  for a human to review with `kane-cli context review` locally.
-- **Traceability over raw counts:** every test kane-cli designs is permanently tagged with the
-  acceptance criteria it verifies, so the coverage step surfaces AC → use-case → test → result,
-  not just a pass/fail count.
-- **Evidence, not just logs:** every run seals an `.evidence` pack (screenshots, console/network
-  logs, failure records). The workflow validates each pack's integrity before publishing it, so
-  a broken/truncated pack fails the run instead of silently uploading garbage.

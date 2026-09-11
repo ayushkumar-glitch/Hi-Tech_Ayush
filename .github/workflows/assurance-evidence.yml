@@ -1,106 +1,67 @@
 name: Assurance & Evidence (kane-cli)
 
-# Manual dispatch only — assurance/design/extract calls consume kane-cli credits,
-# so this must not fire on every commit (README edits, dep bumps, etc).
+# The assurance design phase (ingest -> extract -> review -> design -> author) is done
+# locally by a human, once, and the resulting *_test.md files are committed under tests/.
+# CI's job is repeatable execution only: install, authenticate, replay the committed suite,
+# validate evidence, and publish results/artifacts. This keeps CI free (no design/authoring
+# credits spent per run) and keeps every run's tests requirement-traceable.
 on:
-  workflow_dispatch:
-    inputs:
-      prd_path:
-        description: "Requirements document to ingest"
-        required: false
-        default: "requirements/prd.md"
-      design_max:
-        description: "Max scenario+test pairs per use-case"
-        required: false
-        default: "8"
-      auto_approve:
-        description: "Auto-approve assurance checkpoints with recommended defaults"
-        type: boolean
-        required: false
-        default: true
-      tm_project_id:
-        description: "Test Manager project ID"
-        required: true
-      tm_environment_id:
-        description: "Test environment ID (optional)"
-        required: false
-      kane_folder_id:
-        description: "KaneAI folder ID for saving authored tests (recommended)"
-        required: false
-
-env:
-  LT_USERNAME: ${{ secrets.LT_USERNAME }}
-  LT_ACCESS_KEY: ${{ secrets.LT_ACCESS_KEY }}
-  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-  PRD_PATH: ${{ github.event.inputs.prd_path }}
-  DESIGN_MAX: ${{ github.event.inputs.design_max }}
-  AUTO_APPROVE: ${{ github.event.inputs.auto_approve }}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
 
 jobs:
-  assurance-and-evidence:
+  assurance-evidence:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node
+      - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Install kane-cli
         run: npm install -g @testmuai/kane-cli@latest
 
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
-
       - name: Authenticate kane-cli
-        run: kane-cli login --username "$LT_USERNAME" --access-key "$LT_ACCESS_KEY"
+        run: kane-cli login --username "${{ secrets.LT_USERNAME }}" --access-key "${{ secrets.LT_ACCESS_KEY }}"
 
-      - name: Configure Test Manager project
-        if: ${{ github.event.inputs.tm_project_id != '' }}
-        run: kane-cli config project "${{ github.event.inputs.tm_project_id }}"
-
-      - name: Run assurance pipeline (ingest -> extract -> design -> author -> replay)
-        run: python3 ci/assurance_pipeline.py
-
-      - name: Publish traceability matrix & coverage
-        if: always()
-        run: python3 ci/traceability.py
+      - name: Replay committed test suite
+        run: kane-cli testrun run tests/*_test.md --headless --on-failure continue
 
       - name: Validate evidence packs
         if: always()
-        run: python3 ci/evidence.py
+        run: |
+          shopt -s nullglob
+          packs=(.testmuai/evidence/*.evidence)
+          if [ ${#packs[@]} -eq 0 ]; then
+            echo "::warning::no evidence packs found"
+            exit 0
+          fi
+          status=0
+          for pack in "${packs[@]}"; do
+            echo "validating $pack"
+            kane-cli evidence validate "$pack" --json || status=1
+          done
+          exit $status
 
       - name: Upload evidence packs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: evidence-packs
-          path: .testmuai/evidence/**/*.evidence
+          path: .testmuai/evidence/*.evidence
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload designed tests
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: designed-tests
-          path: .testmuai/tests/**/*_test.md
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Upload raw pipeline logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pipeline-logs
-          path: artifacts/**
-          if-no-files-found: warn
+          name: test-results
+          path: .testmuai/tests/**/output-*/**
+          if-no-files-found: ignore
           retention-days: 14
