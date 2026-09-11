@@ -1,0 +1,12 @@
+# kane-cli local assurance store — append-only, never hand-edit, machine-specific
+.context/
+
+# kane-cli local test/evidence output (published as CI artifacts instead)
+.testmuai/
+
+# pipeline logs written by ci/*.py
+artifacts/
+
+__pycache__/
+*.pyc
+.DS_Store
